@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BiliShot - Bilibili video screenshot
 // @namespace    https://github.com/CST-Cat/bili-shot
-// @version      0.2.0
-// @description  Copy the current Bilibili video frame to the clipboard with a custom hotkey and image format.
+// @version      0.1.1
+// @description  Copy the current Bilibili video frame to the clipboard with a custom hotkey.
 // @author       CST-Cat
 // @match        *://www.bilibili.com/*
 // @match        *://m.bilibili.com/*
@@ -20,14 +20,12 @@
 /*
 README
 
-BiliShot copies the current Bilibili video frame to the clipboard.
+BiliShot copies the current Bilibili video frame to the clipboard as a PNG.
 Default hotkey: W.
-Default image format: PNG.
 
 Menu commands:
 - BiliShot: 复制当前视频帧
 - BiliShot: 设置快捷键
-- BiliShot: 设置图片格式
 - BiliShot: 恢复默认快捷键
 
 */
@@ -37,23 +35,14 @@ Menu commands:
 
   const SCRIPT_NAME = "BiliShot";
   const DEFAULT_HOTKEY = "W";
-  const DEFAULT_FORMAT_ID = "png";
   const HOTKEY_STORAGE_KEY = "bili-shot.hotkey";
-  const FORMAT_STORAGE_KEY = "bili-shot.format";
   const TOAST_ID = "bili-shot-toast";
   const TOAST_STYLE_ID = "bili-shot-toast-style";
-  const IMAGE_FORMATS = [
-    { id: "png", label: "PNG", mime: "image/png" },
-    { id: "jpg", label: "JPG", mime: "image/jpeg", quality: 0.92 },
-    { id: "webp", label: "WebP", mime: "image/webp", quality: 0.92 },
-    { id: "avif", label: "AVIF", mime: "image/avif", quality: 0.92 },
-  ];
   const IS_MAC = /\b(Mac|iPhone|iPad|iPod)\b/i.test(
     `${navigator.platform || ""} ${navigator.userAgent || ""}`,
   );
 
   let activeHotkey = parseHotkey(readStoredValue(HOTKEY_STORAGE_KEY, DEFAULT_HOTKEY));
-  let activeFormat = getStoredFormat();
   let captureRunning = false;
   let toastTimer = 0;
 
@@ -113,11 +102,6 @@ Menu commands:
         return;
       }
 
-      if (!clipboard.supportsType(activeFormat.mime)) {
-        showToast(`当前浏览器不支持复制 ${activeFormat.label} 图片`, "error", 3600);
-        return;
-      }
-
       const width = video.videoWidth;
       const height = video.videoHeight;
       const canvas = document.createElement("canvas");
@@ -132,11 +116,11 @@ Menu commands:
       context.drawImage(video, 0, 0, width, height);
 
       const item = new clipboard.ClipboardItem({
-        [activeFormat.mime]: canvasToImageBlob(canvas, activeFormat),
+        "image/png": canvasToPngBlob(canvas),
       });
 
       await clipboard.writeItems([item]);
-      showToast(`已复制 ${activeFormat.label} 截图 ${width} x ${height}`, "success");
+      showToast(`已复制视频截图 ${width} x ${height}`, "success");
     } catch (error) {
       reportCaptureError(error);
     } finally {
@@ -236,21 +220,16 @@ Menu commands:
     return width * height;
   }
 
-  function canvasToImageBlob(canvas, format) {
+  function canvasToPngBlob(canvas) {
     return new Promise((resolve, reject) => {
       try {
         canvas.toBlob((blob) => {
           if (blob) {
-            if (blob.type && blob.type !== format.mime) {
-              reject(new Error(`This browser cannot export ${format.label} images.`));
-              return;
-            }
-
             resolve(blob);
           } else {
-            reject(new Error(`Canvas export returned an empty ${format.label} image.`));
+            reject(new Error("Canvas export returned an empty image."));
           }
-        }, format.mime, format.quality);
+        }, "image/png");
       } catch (error) {
         reject(error);
       }
@@ -267,9 +246,6 @@ Menu commands:
         clipboard &&
         typeof clipboard.write === "function" &&
         typeof ClipboardItemConstructor === "function",
-      supportsType: (type) =>
-        typeof ClipboardItemConstructor.supports !== "function" ||
-        ClipboardItemConstructor.supports(type),
       writeItems: (items) => clipboard.write(items),
     };
   }
@@ -291,11 +267,6 @@ Menu commands:
       return;
     }
 
-    if (/not support|not supported|cannot export|type|mime|format/i.test(text)) {
-      showToast(`当前浏览器不支持复制 ${activeFormat.label} 图片`, "error", 4200);
-      return;
-    }
-
     showToast(`截图失败：${shorten(text, 70)}`, "error", 4200);
   }
 
@@ -309,7 +280,6 @@ Menu commands:
     });
 
     GM_registerMenuCommand("BiliShot: 设置快捷键", openHotkeyPrompt);
-    GM_registerMenuCommand(`BiliShot: 设置图片格式（当前 ${activeFormat.label}）`, openFormatPrompt);
 
     GM_registerMenuCommand("BiliShot: 恢复默认快捷键", () => {
       writeStoredValue(HOTKEY_STORAGE_KEY, DEFAULT_HOTKEY);
@@ -343,44 +313,6 @@ Menu commands:
     writeStoredValue(HOTKEY_STORAGE_KEY, parsed.canonical);
     activeHotkey = parsed;
     showToast(`快捷键已设置为 ${parsed.canonical}`, "success");
-  }
-
-  function openFormatPrompt() {
-    const options = IMAGE_FORMATS.map((format) => format.id).join(", ");
-    const next = prompt(
-      [
-        "设置 BiliShot 图片格式",
-        "",
-        `可选：${options}`,
-        "部分浏览器可能不支持将 JPG、WebP 或 AVIF 写入剪贴板。",
-      ].join("\n"),
-      activeFormat.id,
-    );
-
-    if (next === null) {
-      return;
-    }
-
-    const format = findImageFormat(next);
-    if (!format) {
-      alert(`图片格式无效。请选择：${options}`);
-      return;
-    }
-
-    activeFormat = format;
-    writeStoredValue(FORMAT_STORAGE_KEY, activeFormat.id);
-    showToast(`图片格式已设置为 ${activeFormat.label}`, "success");
-  }
-
-  function getStoredFormat() {
-    return findImageFormat(readStoredValue(FORMAT_STORAGE_KEY, DEFAULT_FORMAT_ID)) ||
-      findImageFormat(DEFAULT_FORMAT_ID);
-  }
-
-  function findImageFormat(input) {
-    const id = String(input || "").trim().toLowerCase();
-    const normalized = id === "jpeg" ? "jpg" : id;
-    return IMAGE_FORMATS.find((format) => format.id === normalized) || null;
   }
 
   function parseHotkey(input) {
